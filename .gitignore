@@ -31,3 +31,10 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### OS ###
+.DS_Store
+
+### App-specific ###
+.env
+*.env.local
