@@ -4,11 +4,11 @@ Full spec: `ValidationIQ_MVP_Specification.md` (repo root). Read that first for
 scope, data model, routes, and business rules — this file tracks build
 progress and conventions, not the product spec itself.
 
-## Status: Phase 1 (Setup) complete
+## Status: Phase 2 (Domain Model) complete
 
-Of the spec's 7-phase build order (section 21), only **Phase 1: Setup** is
-done. Nothing beyond scaffolding exists yet — no entities, controllers,
-services, repositories, or templates.
+Of the spec's 7-phase build order (section 21), **Phase 1: Setup** and
+**Phase 2: Domain Model** are done. No controllers, services, or templates
+exist yet — that starts with Phase 3.
 
 ## What's completed
 
@@ -55,6 +55,58 @@ services, repositories, or templates.
   2. `fabb796` — `docker-compose.yml`, `.env.example`, `.gitignore` additions — made by Claude
      at the user's explicit request.
 
+## Phase 2: Domain Model (this session)
+
+- **Enums** (`enums/`): `TestRunResult` (PASS/FAIL/PARTIAL), `FailureSeverity`
+  (LOW/MEDIUM/HIGH/CRITICAL), `FailureStatus` (OPEN/IN_PROGRESS/RESOLVED/CLOSED)
+  — plain Java enums, stored via `@Enumerated(EnumType.STRING)` wherever
+  referenced (readable DB values, safe against reordering — vs. fragile
+  integer ordinals).
+- **Entities** (`entity/`): `Project`, `TestRun`, `Failure`, `Comment`, fields
+  exactly matching spec sections 7.1–7.4. Design decisions made explicitly
+  with the user (who is new to backend development — favored visible/explicit
+  code over framework "magic" throughout):
+  - **Unidirectional relationships only.** Child entities hold a `@ManyToOne`
+    reference to their parent (`TestRun.project`, `Failure.testRun`,
+    `Comment.failure`); parents do **not** hold `@OneToMany` collections back
+    to children. To list a project's test runs, query the repository (e.g.
+    `testRunRepository.findByProjectId(id)`) rather than `project.getTestRuns()`.
+    No such finder methods exist yet — add them in whichever later phase
+    first needs them, not speculatively now.
+  - **No Lombok** — all getters/setters are hand-written, even though
+    `lombok` remains an unused optional dependency in `pom.xml` from the
+    Initializr default (left alone; removing it is out of this phase's scope).
+  - **`@PrePersist`/`@PreUpdate`** lifecycle callback methods (not Spring Data
+    JPA auditing) set `createdAt`/`updatedAt` directly in each entity.
+    `Comment` only has `createdAt` (no `updatedAt`), matching spec 7.4.
+  - `Failure.status` defaults to `OPEN` and `Failure.severity` defaults to
+    `MEDIUM` via field initializers, per business rules 4–5 (spec section 11)
+    — set at the entity level so any code path that creates a `Failure`
+    without explicitly setting these gets the correct default, ahead of the
+    form-layer defaults referenced in spec 9.9.
+  - No Bean Validation annotations (`@NotBlank`, `@Size`) on entities —
+    spec section 14 recommends validating via DTOs/form objects instead,
+    which arrive with the controllers in Phase 3+.
+- **Repositories** (`repository/`): `ProjectRepository`, `TestRunRepository`,
+  `FailureRepository`, `CommentRepository` — each just `extends
+  JpaRepository<T, Long>`, no custom query methods yet.
+- **Verified**:
+  - `./mvnw compile` — clean.
+  - `docker compose up -d postgres` + `./mvnw spring-boot:run` — Hibernate
+    (`ddl-auto=update`) created `project`, `test_run`, `failure`, `comment`
+    tables with correct columns, types, check constraints on the enum
+    columns, and foreign keys (confirmed via `psql \dt` / `\d <table>`).
+  - `./mvnw test` — 2/2 passing: the existing context test, plus a new
+    `src/test/java/com/example/validationiq/repository/EntityRelationshipTest.java`
+    (`@DataJpaTest` against the real Postgres container, since no embedded
+    test DB is configured) that persists a full Project → TestRun → Failure →
+    Comment chain and asserts every save/reload round-trip and FK association,
+    including the `OPEN`/`MEDIUM` defaults — satisfies spec section 22
+    instruction 12 ("verify entity relationships before building views")
+    automatically rather than only via manual `psql` checks.
+- Not yet committed — per the "never commit without being asked" convention
+  below, the user is reviewing this work before deciding to commit/push.
+
 ## Conventions established this session
 
 - **Plan mode for anything non-trivial.** User wants an explicit plan reviewed and approved
@@ -72,29 +124,39 @@ services, repositories, or templates.
 - **Match the spec's exact naming/paths when it's explicit** (e.g. `ValidationIqApplication.java`,
   the section 13 package layout) even when a generator (Initializr) defaults to something close
   but not identical.
+- **Explain unfamiliar concepts in plain terms before presenting a technical decision.** The user
+  is new to backend development — don't lead with jargon-laden options (e.g. "bidirectional vs.
+  unidirectional JPA relationships"); walk through what each choice actually means and why it
+  matters first, then ask.
+- **Keep this file updated as work is completed, not just at session end.** The user wants to be
+  able to start a fresh Claude Code session and immediately know where the project was left off —
+  update "Status" / "What's completed" / "Next" incrementally as milestones land.
 - Java/Maven/Docker are all available locally (Java 21.0.11, Maven 3.9.12, Docker 29.1.3 +
   Compose 2.40.3) — no environment setup needed in future sessions.
 
-## Next: Phase 2 — Domain Model
+## Next: Phase 3 — Projects
 
 Per spec section 21, in order:
-1. Enums: `TestRunResult` (PASS/FAIL/PARTIAL), `FailureSeverity` (LOW/MEDIUM/HIGH/CRITICAL),
-   `FailureStatus` (OPEN/IN_PROGRESS/RESOLVED/CLOSED) — see spec section 8 for exact values.
-2. `Project` entity (spec 7.1) — id, name, description, createdAt, updatedAt; one-to-many to TestRun.
-3. `TestRun` entity (spec 7.2) — includes `projectId`, `result` enum, `executionDate`;
-   many-to-one to Project, one-to-many to Failure.
-4. `Failure` entity (spec 7.3) — includes `testRunId`, `severity`/`status` enums,
-   `expectedResult`/`actualResult`; many-to-one to TestRun, one-to-many to Comment.
-5. `Comment` entity (spec 7.4) — `authorName`, `content`, `failureId`; many-to-one to Failure.
-6. Repositories (Spring Data JPA) for each entity.
-7. Verify tables are created correctly (`ddl-auto=update` will auto-create them — confirm via
-   `psql` or a DB client against the running `validationiq-postgres` container).
+1. `ProjectService` — create/update/delete logic; enforce business rule 9 (don't allow deleting a
+   project that has test runs, unless cascade is deliberately implemented — spec section 9.2).
+2. `ProjectController` — routes per spec section 12: `GET /projects`, `GET /projects/new`,
+   `POST /projects`, `GET /projects/{id}`, `GET /projects/{id}/edit`, `POST /projects/{id}`,
+   `POST /projects/{id}/delete`.
+3. `ProjectForm` DTO (spec section 14) — `name` (`@NotBlank`, `@Size`), `description` (`@Size`) —
+   this is where Bean Validation annotations belong, per the Phase 2 decision to keep them off entities.
+4. Projects list template (spec 9.2): name, description, test run count, created date.
+5. Create/edit form template (spec 9.3).
+6. Project details template (spec 9.4): name, description, timestamps, associated test runs.
+   Since `TestRun` doesn't hold a back-reference collection (Phase 2's unidirectional decision),
+   this page needs `testRunRepository.findByProjectId(id)` — likely the first custom repository
+   query method added in the project, via a service method.
+7. Validation error display, per spec section 14.
 
-Business rules to keep in mind while building entities (spec section 11): every TestRun needs
-a Project, every Failure needs a TestRun, every Comment needs a Failure; deleting a Failure
-should cascade-delete its Comments; deleting a Project/TestRun with children should **not**
-cascade silently — that needs deliberate handling (likely in the service layer, not just JPA
-cascade annotations) in a later phase.
+Business rules to keep in mind (spec section 11): every TestRun needs a Project (already enforced
+at the entity level via `nullable = false`); deleting a Project with TestRuns should **not**
+cascade silently — needs deliberate handling in `ProjectService`, not just a JPA cascade annotation;
+invalid project IDs must show a user-friendly error (`ResourceNotFoundException` +
+`@ControllerAdvice`, spec section 15) rather than a raw 404/stack trace.
 
 ## How to run / verify locally
 
